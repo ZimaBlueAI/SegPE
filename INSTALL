@@ -1,0 +1,24 @@
+
+## 0x01 Install Rust/Cargo
+
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+or update rust/cargo
+```
+rustup update stable
+```
+
+## 0x02 build
+```
+cd SegPE
+cargo build --release
+
+## SIMD
+# Intel x86 amd64, edit Cargo.toml firstly
+cargo build --features simd_avx2 --release
+
+# Arm aarch64, default
+cargo build --features simd_neon --release
+```

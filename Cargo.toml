@@ -1,0 +1,63 @@
+[package]
+name = "segpe"
+version = "0.1.13"
+edition = "2021"
+authors = ["BENM(Binxiao Feng) (c) ZimaBlueAI"]
+rust-version = "1.77.0"
+description = "a simple program for classifing and separating PE FASTQ after removing adapters via adapter-index seq"
+keywords = ["fasta", "fa", "fastq", "fq", "adapter", "index", "seed", "fmindex", "cli", "sequence", "bio"]
+categories = ["algorithms", "hardware-support", "science", "text-processing"]
+readme = "README.md"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.docs.rs]
+features = ["simd_neon"]
+# Intel x86 change to 
+# features = ["simd_avx2"]
+
+[features]
+# Enable SSE2
+simd_sse2 = []
+# Enable AVX2
+simd_avx2 = []
+# Enable WASM SIMD
+simd_wasm = []
+# Enable Neon
+simd_neon = []
+
+# No SIMD
+no_simd = []
+
+# Print lots of debug information
+debug = ["debug_size"]
+# Print only the final block sizes
+debug_size = []
+# Prepare code for analysis by llvm-mca
+mca = []
+
+[dependencies]
+regex = "1.10.3"
+memmap2 = "0.9.4"
+# fastq = "0.6.0"
+crossbeam = "0.8.4"
+crossbeam-channel = "0.5.12"
+bio = "1.6.0"
+fastq = "0.6.0"
+needletail = "0.5.1"
+clap = { version = "4.5.4", features = ["derive"] }
+glob = "0.3.1"
+futures = "0.3.30"
+tokio = { version = "1.37.0", features = ["full"] }
+flate2 = "1.0.28"
+env_logger = "0.11.3"
+log = "0.4.21"
+
+## Mac aarch64 architect change to below setting
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+block-aligner = { version = "0.5", features = ["simd_neon"] }
+
+
+## Intel x86 amd64 architect change to below setting
+# [target.'cfg(target_arch = "x86_64")'.dependencies]
+# block-aligner = { version = "0.5", features = ["simd_avx2"] }
