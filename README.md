@@ -22,22 +22,22 @@ rustup update
 cd SegPE
 cargo build --release
 
-## SIMD  edit Cargo.tom first
+## SIMD  edit Cargo.toml first
 # Intel x86
 cargo build --features simd_avx2 --release
 # Arm 
 cargo build --features simd_neon --release
 ```
 
-##Example:
+## Example:
 
 ```
-./target/release/segpe --five-art-fa data/5_art.fa --three-art-fa data/3_art.fa --five-idx-fa data/idx.fa --pe1-fastq data/PE1.fastq.gz --pe2-fastq data/PE2.fastq.gz -n 1000 -b 100 -o data/output
+time RUST_LOG=INFO ./target/release/segpe --five-art-fa data/5_art.fa --three-art-fa data/3_art.fa --five-idx-fa data/idx.fa --pe1-fastq data/PE1.fastq.gz --pe2-fastq data/PE2.fastq.gz -n 1000 -b 100 -o data/output
 ```
 
 ### Version
 
-0.1.13, build-240404
+0.1.14, build-240429
 
 ### Usage
 

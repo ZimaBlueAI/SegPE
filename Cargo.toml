@@ -1,8 +1,8 @@
 [package]
 name = "segpe"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
-authors = ["BENM(Binxiao Feng) (c) ZimaBlueAI"]
+authors = ["BENM(Binxiao) Feng <binxiaofeng@gmail.com>"]
 rust-version = "1.77.0"
 description = "a simple program for classifing and separating PE FASTQ after removing adapters via adapter-index seq"
 keywords = ["fasta", "fa", "fastq", "fq", "adapter", "index", "seed", "fmindex", "cli", "sequence", "bio"]
@@ -12,9 +12,9 @@ license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [package.metadata.docs.rs]
-features = ["simd_neon"]
+# features = ["simd_neon"]
 # Intel x86 change to 
-# features = ["simd_avx2"]
+features = ["simd_avx2"]
 
 [features]
 # Enable SSE2
@@ -53,11 +53,6 @@ flate2 = "1.0.28"
 env_logger = "0.11.3"
 log = "0.4.21"
 
-## Mac aarch64 architect change to below setting
-[target.'cfg(target_arch = "aarch64")'.dependencies]
-block-aligner = { version = "0.5", features = ["simd_neon"] }
-
-
-## Intel x86 amd64 architect change to below setting
-# [target.'cfg(target_arch = "x86_64")'.dependencies]
-# block-aligner = { version = "0.5", features = ["simd_avx2"] }
+# Intel x86 change to 
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+block-aligner = { version = "0.5", features = ["simd_avx2"] }

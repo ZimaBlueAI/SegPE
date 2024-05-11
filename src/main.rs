@@ -23,7 +23,7 @@ use utils::*;
 #[derive(Parser, Debug)]
 #[command(
     author = "BENM",
-    version = "version 0.1.13",
+    version = "version 0.1.14",
     about = "SegPE: a simple program for classifing and separating PE FASTQ after removing adapters via adapter-index seq",
     long_about = "Algorithmic ideas of SegPE:
     - Exact match search: This is a more direct method for finding exact matches of artificial sequences.
@@ -224,8 +224,29 @@ fn fastmap_five_art_idx(five_artificial_map: &BTreeMap<Vec<u8>, String>, five_in
 
 }
 
+fn fastmap_art_seed(artificial_map: &BTreeMap<Vec<u8>, String>, seed_len: usize) -> BTreeMap<String, Vec<(String,u8)>> {
+    let mut art_seed_map: BTreeMap<String, Vec<(String,u8)>> = BTreeMap::new();
+    for fa_map in artificial_map.iter() {
+        let art_seq = String::from_utf8(fa_map.0.clone()).unwrap();
+        let id = fa_map.1.clone();
+        for i in 0..art_seq.len()-seed_len {
+            let seed = &art_seq[i..i+seed_len];
+            if art_seed_map.contains_key(seed) {
+                art_seed_map.get_mut(seed).unwrap().push((id.clone(),i as u8));
+            } else {
+                art_seed_map.insert(seed.to_string(), vec![(id.clone(),i as u8)]);
+            }
+        }
+    }
+    art_seed_map
+
+}
+
 fn classify_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_artificial_map: &BTreeMap<Vec<u8>, String>,
-    five_index_map: &BTreeMap<Vec<u8>, String>, three_index_map: &BTreeMap<Vec<u8>, String>, five_art_length: usize, index_map_bool: bool,
+    five_index_map: &BTreeMap<Vec<u8>, String>, three_index_map: &BTreeMap<Vec<u8>, String>, 
+    five_artificial_id_map: &BTreeMap<String, Vec<u8>>, three_artificial_id_map: &BTreeMap<String, Vec<u8>>,
+    five_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>, three_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>,
+    five_art_length: usize, index_map_bool: bool,
     reads: &mut Vec<String>, seed_length: usize,
     error_tolerance: u8, match_score: i8, mismatch_score: i8,
     gap_open_score: i8, gap_extend_score: i8, trim_name: bool) -> (Vec<(String, String)>,BTreeMap<Vec<u8>, String>) {
@@ -263,30 +284,28 @@ fn classify_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_art
                 // let mut map_id5 = String::new();
                 let mut max_score5 = 0;
                 
-                if five_artificial_idx_map.len() > 0 {
+                if five_art_seed_map.len() > 0 {
                     for j in 0..1+error_tolerance as usize { // 从5'端开始，每次向右移动一个碱基至error_tolerance，如果error_tolerance=1, 即0,1
                         if j+seed_length < read_len{
                             let seed = &reads[i*4+1][j..j+seed_length];
-                            for fa_map in five_artificial_idx_map.iter() { // 取出所有的five_artificial_seq
-                                // let art_seq = String::from_utf8(fa_map.1.clone()).unwrap();
-                                let art_seq = String::from_utf8(fa_map.0.clone()).unwrap();
-                                let match_pos = regrex_sarch(&art_seq, seed);
-                                if match_pos.len() > 0 {
-                                    for pos in match_pos {  // 遍历匹配的位置
-                                        if pos >= j as i16 {
-                                            let pos_usize = pos as usize;
-                                            let overlapping_len = art_seq.len() - pos_usize + j;
-                                            if overlapping_len<read_len && overlapping_len>=seed_length{
-                                                let res: block_aligner::scan_block::AlignResult = block_align(&art_seq[pos_usize-j..], &reads[i*4+1][..overlapping_len], match_score, mismatch_score, gap_open_score, gap_extend_score);
-                                                if res.score > max_score5 && res.score>= overlapping_len as i32 - error_tolerance as i32 {
-                                                    max_score5 = res.score;
-                                                    cls5 = fa_map.1.clone();
-                                                    cls5_bool = true;
-                                                    left_trim_pos = overlapping_len as usize;
-                                                    if max_score5 == overlapping_len as i32 {
-                                                        break_bool = true;
-                                                        break;
-                                                    }
+                            if five_art_seed_map.contains_key(seed) {
+                                let vec_map = five_art_seed_map.get(seed); 
+                                for map in vec_map.unwrap() {
+                                    let map_id5 = map.0.clone(); 
+                                    if five_artificial_id_map.contains_key(&map_id5) {
+                                        let art_seq = String::from_utf8(five_artificial_id_map.get(&map_id5).unwrap().to_owned()).unwrap();
+                                        let pos = map.1 as usize;
+                                        let overlapping_len = art_seq.len() - pos + j;                                                                                    
+                                        if overlapping_len < read_len && overlapping_len >= seed_length {
+                                            let res: block_aligner::scan_block::AlignResult = block_align(&art_seq, &reads[i * 4 + 1][..overlapping_len], match_score, mismatch_score, gap_open_score, gap_extend_score); //TODO
+                                            if res.score > max_score5 && res.score >= overlapping_len as i32 - error_tolerance as i32 {
+                                                max_score5 = res.score;
+                                                cls5 = map_id5.clone();
+                                                cls5_bool = true;
+                                                left_trim_pos = overlapping_len as usize;
+                                                if max_score5 == overlapping_len as i32 {
+                                                    break_bool = true;
+                                                    break;
                                                 }
                                             }
                                         }
@@ -334,23 +353,22 @@ fn classify_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_art
             for j in 0..1+error_tolerance as usize {
                 let read_len = read_len;
                 let seed = &reads[i*4+1][read_len-seed_length-j..read_len-j];
-                for fa_map in three_artificial_map.iter() {
-                    let art_seq = String::from_utf8(fa_map.0.clone()).unwrap();
-                    let match_pos = regrex_sarch(&art_seq, seed);
-                    if match_pos.len() > 0 {
-                        for pos in match_pos {
-                            if pos > -1i16 {
-                                let pos_usize = pos as usize;
-                                let overlapping_len = pos_usize+seed_length+j;
-                                if overlapping_len>=seed_length && pos_usize+overlapping_len < art_seq.len() && read_len-seed_length-j-pos_usize>0 && read_len-seed_length-j-pos_usize<reads[i*4+1].len(){
-                                    let res = block_align(&art_seq[0..pos_usize+overlapping_len], &reads[i*4+1][read_len-seed_length-j-pos_usize..], match_score, mismatch_score, gap_open_score, gap_extend_score);
-                                    if res.score > max_score3 && res.score >= overlapping_len as i32 - error_tolerance as i32 {
-                                        max_score3 = res.score;
-                                        right_trim_pos = read_len-seed_length-j-pos_usize;
-                                        if max_score3 == overlapping_len as i32 {
-                                            break_bool = true;
-                                            break;
-                                        }
+                if three_art_seed_map.contains_key(seed) {
+                    let vec_map = three_art_seed_map.get(seed); 
+                    for map in vec_map.unwrap() {
+                        let map_id3 = map.0.clone(); 
+                        if three_art_seed_map.contains_key(&map_id3) {
+                            let art_seq = String::from_utf8(three_artificial_id_map.get(&map_id3).unwrap().to_owned()).unwrap();
+                            let pos = map.1 as usize;
+                            let overlapping_len = pos+seed_length+j;                                                              
+                            if overlapping_len>=seed_length && pos+overlapping_len < art_seq.len() && read_len-seed_length-j-pos>0 && read_len-seed_length-j-pos<reads[i*4+1].len(){
+                                let res = block_align(&art_seq[0..pos+overlapping_len], &reads[i*4+1][read_len-seed_length-j-pos..], match_score, mismatch_score, gap_open_score, gap_extend_score);
+                                if res.score > max_score3 && res.score >= overlapping_len as i32 - error_tolerance as i32 {
+                                    max_score3 = res.score;
+                                    right_trim_pos = read_len-seed_length-j-pos;
+                                    if max_score3 == overlapping_len as i32 {
+                                        break_bool = true;
+                                        break;
                                     }
                                 }
                             }
@@ -394,7 +412,7 @@ fn classify_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_art
                 reads[i*4+0] = format!("{} |trimed:{}..end", &reads[i*4+0].trim_end(), right_trim_pos);
             }
         }
-        
+                
         if cls5 != "" {
             let left_trim_seq = (&reads[i * 4 + 1][0..five_art_length]).as_bytes();
             if !five_artificial_idx_map.contains_key(left_trim_seq) {
@@ -402,13 +420,20 @@ fn classify_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_art
             }
         }
         cls.push((cls5.to_string(),cls3.to_string()));
+
+        //trim artificial seq
+        reads[i*4+1] = reads[i*4+1][left_trim_pos..right_trim_pos].to_string();
+        reads[i*4+3] = reads[i*4+3][left_trim_pos..right_trim_pos].to_string();
     }
     (cls, five_artificial_idx_map_ext)
 }
 
 // 定义处理函数
 fn process_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_artificial_map: &BTreeMap<Vec<u8>, String>,
-        five_index_map: &BTreeMap<Vec<u8>, String>, three_idx_map: &BTreeMap<Vec<u8>, String>, five_art_length: usize, idx_loc: u8,
+        five_index_map: &BTreeMap<Vec<u8>, String>, three_idx_map: &BTreeMap<Vec<u8>, String>, 
+        five_artificial_id_map: &BTreeMap<String, Vec<u8>>, three_artificial_id_map: &BTreeMap<String, Vec<u8>>,
+        five_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>, three_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>,
+        five_art_length: usize, idx_loc: u8,
         prefix1: &str, prefix2: &str, pair: (Vec<String>, Vec<String>), seed_length: usize, merge_pe_bool: bool,
         error_tolerance: u8, match_score: i8, mismatch_score: i8,
         gap_open_score: i8, gap_extend_score: i8, io_tx: Sender<Vec<PEreads>>, trim_name: bool) {
@@ -425,10 +450,12 @@ fn process_reads(five_artificial_idx_map: &BTreeMap<Vec<u8>, String>, three_arti
     // let mut reads1 = pair.0.clone();
     // let mut reads2 = pair.1.clone();
     let (cls1, _) = classify_reads(five_artificial_idx_map, three_artificial_map,
-        five_index_map, three_idx_map, five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, seed_length,
+        five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
+        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, seed_length,
         error_tolerance, match_score, mismatch_score, gap_open_score, gap_extend_score, trim_name);
     let (cls2, _) = classify_reads(five_artificial_idx_map, three_artificial_map,
-        five_index_map, three_idx_map, five_art_length, idx_loc & 0b10 == 0b10, &mut reads2, seed_length,
+        five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map, 
+        five_art_length, idx_loc & 0b10 == 0b10, &mut reads2, seed_length,
         error_tolerance, match_score, mismatch_score, gap_open_score, gap_extend_score, trim_name);
 
     for i in 0..cls1.len() {
@@ -570,17 +597,26 @@ async fn process_io(rx: std::sync::mpsc::Receiver<BTreeMap<String, Vec<String>>>
     }
 }
 
-fn proceed_artidx_map(five_art_fa: &str, three_art_fa: &str,five_idx_fa: &str, three_idx_fa: &str) -> 
+fn proceed_artidx_map(five_art_fa: &str, three_art_fa: &str,five_idx_fa: &str, three_idx_fa: &str, seed_len: usize) -> 
                                         Result<(usize, BTreeMap<Vec<u8>, String>, BTreeMap<Vec<u8>, String>, 
-                                        BTreeMap<Vec<u8>, String>, BTreeMap<Vec<u8>, String>), std::io::Error>{
+                                        BTreeMap<Vec<u8>, String>, BTreeMap<Vec<u8>, String>, 
+                                        BTreeMap<String, Vec<u8>>, BTreeMap<String, Vec<u8>>,
+                                        BTreeMap<String, Vec<(String,u8)>>,  BTreeMap<String, Vec<(String,u8)>>), std::io::Error>{
     debug!("run proceed_artidx_map");
     let start = Instant::now();
     let five_artificial_map = readfa_to_btreemap(&five_art_fa);
     let three_artificial_map = readfa_to_btreemap(&three_art_fa);
+    let five_artificial_id_map = readfa_to_id_btreemap(&five_art_fa);
+    let three_artificial_id_map = readfa_to_id_btreemap(&three_art_fa);
     let five_index_map = readfa_to_btreemap(&five_idx_fa);
     let three_index_map = readfa_to_btreemap(&three_idx_fa);
 
+
+
     let (five_art_length, five_artificial_idx_map) = fastmap_five_art_idx(&five_artificial_map, &five_index_map);
+
+    let five_art_seed_map = fastmap_art_seed(&five_artificial_idx_map,seed_len);
+    let three_art_seed_map = fastmap_art_seed(&three_artificial_map,seed_len);
 
     info!("valid five_artificial_idx_map number: {}",five_artificial_idx_map.len());
     info!("valid five_index_map number: {}",five_artificial_idx_map.len());
@@ -588,12 +624,15 @@ fn proceed_artidx_map(five_art_fa: &str, three_art_fa: &str,five_idx_fa: &str, t
     info!("valid three_index_map number: {}",five_artificial_idx_map.len());
     let duration = start.elapsed();
     info!("Time elapsed in proceed_artidx_map() is: {:?}", duration);
-    Ok((five_art_length, five_artificial_idx_map, five_index_map, three_artificial_map, three_index_map))
+    Ok((five_art_length, five_artificial_idx_map, five_index_map, three_artificial_map, three_index_map, 
+        five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map))
 }
 
 fn pretrain(pretrain_reads_number: usize, five_art_length: usize, five_artificial_idx_map: BTreeMap<Vec<u8>, String>,
     five_index_map: BTreeMap<Vec<u8>, String>, 
     three_artificial_map: BTreeMap<Vec<u8>, String>, three_index_map: BTreeMap<Vec<u8>, String>,
+    five_artificial_id_map: BTreeMap<String, Vec<u8>>, three_artificial_id_map: BTreeMap<String, Vec<u8>>,
+    five_art_seed_map: BTreeMap<String, Vec<(String,u8)>>, three_art_seed_map: BTreeMap<String, Vec<(String,u8)>>,
     idx_loc: u8, pe1_file: &str, pe2_file: &str,
     seed_length: usize, error_tolerance: u8,
     match_score: i8, mismatch_score: i8,
@@ -608,10 +647,10 @@ fn pretrain(pretrain_reads_number: usize, five_art_length: usize, five_artificia
     let mut pe1_reads: Vec<String> = read_fastq(&pe1_file, pretrain_reads_number);
     let mut pe2_reads: Vec<String>  = read_fastq(&pe2_file, pretrain_reads_number);
     let (_, five_artificial_idx_map_ext1) = classify_reads(&five_artificial_idx_map, &three_artificial_map,
-        &five_index_map, &three_index_map, five_art_length, idx_loc & 0b1 == 0b1, &mut pe1_reads, seed_length,
+        &five_index_map, &three_index_map,  &five_artificial_id_map, &three_artificial_id_map, &five_art_seed_map, &three_art_seed_map, five_art_length, idx_loc & 0b1 == 0b1, &mut pe1_reads, seed_length,
         error_tolerance, match_score, mismatch_score, gap_open_score, gap_extend_score, false);    
     let (_,  five_artificial_idx_map_ext2) = classify_reads(&five_artificial_idx_map, &three_artificial_map,
-        &five_index_map, &three_index_map, five_art_length, idx_loc & 0b10 == 0b10, &mut pe2_reads, seed_length,
+        &five_index_map, &three_index_map, &five_artificial_id_map, &three_artificial_id_map, &five_art_seed_map, &three_art_seed_map, five_art_length, idx_loc & 0b10 == 0b10, &mut pe2_reads, seed_length,
         error_tolerance, match_score, mismatch_score, gap_open_score, gap_extend_score, false);
 
     //TODO: combine five_artificial_idx_map_ext1 and five_artificial_idx_map_ext2
@@ -637,6 +676,8 @@ fn pretrain(pretrain_reads_number: usize, five_art_length: usize, five_artificia
 
 fn seg_pe(five_art_length: usize, five_artificial_idx_map: BTreeMap<Vec<u8>, String>,five_index_map: BTreeMap<Vec<u8>, String>, 
     three_artificial_map: BTreeMap<Vec<u8>, String>, three_index_map: BTreeMap<Vec<u8>, String>,
+    five_artificial_id_map: BTreeMap<String, Vec<u8>>, three_artificial_id_map: BTreeMap<String, Vec<u8>>,
+    five_art_seed_map: BTreeMap<String, Vec<(String,u8)>>, three_art_seed_map: BTreeMap<String, Vec<(String,u8)>>,
     idx_loc: u8, pe1_file: &str, pe2_file: &str,
     seed_length: usize, merge_pe_bool: bool, error_tolerance: u8,
     match_score: i8, mismatch_score: i8,
@@ -671,6 +712,10 @@ fn seg_pe(five_art_length: usize, five_artificial_idx_map: BTreeMap<Vec<u8>, Str
     let three_artificial_map = Arc::new(three_artificial_map);
     let five_index_map = Arc::new(five_index_map);
     let three_index_map = Arc::new(three_index_map);
+    let five_artificial_id_map = Arc::new(five_artificial_id_map);
+    let three_artificial_id_map = Arc::new(three_artificial_id_map);
+    let five_art_seed_map = Arc::new(five_art_seed_map);
+    let three_art_seed_map = Arc::new(three_art_seed_map);
 
     let mut handles = Vec::new();
     for _ in 0..num_threads {
@@ -678,6 +723,10 @@ fn seg_pe(five_art_length: usize, five_artificial_idx_map: BTreeMap<Vec<u8>, Str
         let three_artificial_map = Arc::clone(&three_artificial_map);
         let five_index_map = Arc::clone(&five_index_map);
         let three_index_map = Arc::clone(&three_index_map);
+        let five_artificial_id_map: Arc<BTreeMap<String, Vec<u8>>> = Arc::clone(&five_artificial_id_map);
+        let three_artificial_id_map: Arc<BTreeMap<String, Vec<u8>>>  = Arc::clone(&three_artificial_id_map);
+        let five_art_seed_map = Arc::clone(&five_art_seed_map);
+        let three_art_seed_map = Arc::clone(&three_art_seed_map);
         let (tx, rx) = std::sync::mpsc::channel();
         let rx = Arc::new(Mutex::new(rx)); // Wrap the receiver in a Mutex
         channels.push((tx, Arc::clone(&rx))); // Clone the receiver instead of moving it
@@ -685,9 +734,12 @@ fn seg_pe(five_art_length: usize, five_artificial_idx_map: BTreeMap<Vec<u8>, Str
         let prefix1_clone = prefix1.clone(); // Clone prefix1
         let prefix2_clone = prefix2.clone(); // Change the type of prefix2_clone to Arc<String>
         let io_tx_clone = Arc::new(Mutex::new(io_tx.clone())); // Change the type of io_tx_clone to Arc<Mutex<Sender<(String, Vec<String>, String, Vec<String>)>>>
+        
         let handle = thread::spawn(move || {
             for pair in rx.lock().unwrap().iter() { // Lock the mutex before accessing the receiver
                 process_reads(&five_artificial_idx_map, &three_artificial_map, &five_index_map, &three_index_map,  
+                    &five_artificial_id_map, &three_artificial_id_map,
+                    &five_art_seed_map, &three_art_seed_map,
                     five_art_length, idx_loc,
                     &prefix1_clone, &prefix2_clone,
                     pair, seed_length, merge_pe_bool, 
@@ -776,13 +828,17 @@ fn main() {
     env_logger::init();
 
     let args = Args::parse();
-    let proceed_result = proceed_artidx_map(&args.five_art_fa, &args.three_art_fa, &args.five_idx_fa, &args.three_idx_fa);
-    if let Ok((five_art_length, five_artificial_idx_map, five_index_map, three_artificial_map, three_index_map)) = proceed_result {
+    let proceed_result = proceed_artidx_map(&args.five_art_fa, &args.three_art_fa, &args.five_idx_fa, &args.three_idx_fa, args.seed_len);
+    if let Ok((five_art_length, five_artificial_idx_map, five_index_map, three_artificial_map, three_index_map, 
+        five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map)) = proceed_result {
         let pretrain_result = pretrain(args.train, five_art_length, five_artificial_idx_map, five_index_map.clone(), 
-        three_artificial_map.clone(), three_index_map.clone(),args.idx_loc, &args.pe1_fastq, &args.pe2_fastq, args.seed_len,
+        three_artificial_map.clone(), three_index_map.clone(), five_artificial_id_map.clone(), three_artificial_id_map.clone(), 
+        five_art_seed_map.clone(), three_art_seed_map.clone(), 
+        args.idx_loc, &args.pe1_fastq, &args.pe2_fastq, args.seed_len,
         args.error_tolerance, args.match_score, args.error_score, args.gap_open_score, args.gap_extend_score);
         if let Ok(five_artificial_idx_map_ext) = pretrain_result {
-            if let Err(err) = seg_pe(five_art_length, five_artificial_idx_map_ext, five_index_map, three_artificial_map, three_index_map,
+            if let Err(err) = seg_pe(five_art_length, five_artificial_idx_map_ext, five_index_map, three_artificial_map, three_index_map,  
+                five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
                 args.idx_loc, &args.pe1_fastq, &args.pe2_fastq, args.seed_len,
                 args.merge_pe, args.error_tolerance, args.match_score, args.error_score,
                 args.gap_open_score, args.gap_extend_score, args.num_threads, args.batch, args.trim_name, &args.outdir) {

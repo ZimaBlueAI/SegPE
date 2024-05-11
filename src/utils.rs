@@ -291,3 +291,20 @@ pub fn readfa_to_btreemap(fa_file: &str) -> BTreeMap<Vec<u8>, String> {
     }
     fa_map
 }
+
+#[allow(dead_code)]
+pub fn readfa_to_id_btreemap(fa_file: &str) -> BTreeMap<String, Vec<u8>> {
+    let mut fa_map: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let fa_path = Path::new(&fa_file);
+    if fa_path.exists() {
+        let ref_reader = fasta::Reader::from_file(&fa_file).unwrap();
+        
+        fa_map.extend(ref_reader.records().map(|result| {
+            let result_data = result.unwrap();
+            let id = result_data.id().into();
+            let seq = result_data.seq().to_owned();
+            (id, seq)
+        }));
+    }
+    fa_map
+}
