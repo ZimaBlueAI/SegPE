@@ -37,7 +37,7 @@ time RUST_LOG=INFO ./target/release/segpe --five-art-fa data/5_art.fa --three-ar
 
 ### Version
 
-0.1.14, build-240429
+0.1.15, build-250516
 
 ### Usage
 

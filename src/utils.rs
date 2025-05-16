@@ -143,6 +143,7 @@ fn write_io(data: Vec<String>,file_name: &str)->future::Ready<std::io::Result<()
 }
 
 pub trait WriteFastq {
+    #[allow(dead_code)]
     async fn write_to_fastq(
         &self,
         data: Vec<String>,
