@@ -266,7 +266,7 @@ fn fastmap_art_seed(artificial_map: &BTreeMap<Vec<u8>, String>, seed_len: usize)
 }
 
 // Refactored: classify_reads now takes align_config and trim_config as arguments
-fn classify_reads(
+fn classify_reads_with_trim(
     five_artificial_idx_map: &BTreeMap<Vec<u8>, String>,
     three_artificial_map: &BTreeMap<Vec<u8>, String>,
     five_index_map: &BTreeMap<Vec<u8>, String>,
@@ -456,29 +456,221 @@ fn classify_reads(
         reads[i*4+3] = reads[i*4+3][left_trim_pos..right_trim_pos].to_string();
 
         // 新增低质量和N修剪
-        if trim_config.qual_trim > 0 || trim_config.n_trim || trim_config.poly_trim.is_some() {
-            let trimmer = LowQualityControlTrimmer;
-            let result = trimmer.trim_low_quality(
-                &reads[i*4+1],
-                &reads[i*4+3],
-                trim_config,
-            );
-            match result {
-                Some((trimmed_seq, trimmed_qual, ltrim, rtrim)) => {
-                    reads[i*4+1] = trimmed_seq;
-                    reads[i*4+3] = trimmed_qual;
-                    if trim_config.trim_name {
-                        reads[i*4+0] = format!("{} |lowqual_trim:{}..{}", &reads[i*4+0].trim_end(), ltrim, reads[i*4+1].len() - rtrim);
-                    }
-                    cls.push((cls5.to_string(),cls3.to_string()));
+    // if trim_config.qual_trim > 0 || trim_config.n_trim || trim_config.poly_trim.is_some() {
+        let trimmer = LowQualityControlTrimmer;
+        let result = trimmer.trim_low_quality(
+            &reads[i*4+1],
+            &reads[i*4+3],
+            trim_config,
+        );
+        match result {
+            Some((trimmed_seq, trimmed_qual, ltrim, rtrim)) => {
+                reads[i*4+1] = trimmed_seq;
+                reads[i*4+3] = trimmed_qual;
+                if trim_config.trim_name {
+                    reads[i*4+0] = format!("{} |lowqual_trim:{}..{}", &reads[i*4+0].trim_end(), ltrim, reads[i*4+1].len() - rtrim);
                 }
-                None => {
-                    cls.push(("lowquality".to_string(), "lowquality".to_string()));
+                cls.push((cls5.to_string(),cls3.to_string()));
+            }
+            None => {
+                cls.push(("lowquality".to_string(), "lowquality".to_string()));
+            }
+        }
+
+    }
+    (cls, five_artificial_idx_map_ext)
+}
+
+fn classify_reads_no_trim(
+    five_artificial_idx_map: &BTreeMap<Vec<u8>, String>,
+    three_artificial_map: &BTreeMap<Vec<u8>, String>,
+    five_index_map: &BTreeMap<Vec<u8>, String>,
+    three_index_map: &BTreeMap<Vec<u8>, String>,
+    five_artificial_id_map: &BTreeMap<String, Vec<u8>>,
+    three_artificial_id_map: &BTreeMap<String, Vec<u8>>,
+    five_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>,
+    three_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>,
+    five_art_length: usize,
+    index_map_bool: bool,
+    reads: &mut Vec<String>,
+    align_config: &AlignConfig,
+    trim_name: bool
+) -> (Vec<(String, String)>,BTreeMap<Vec<u8>, String>) {
+    let mut cls = Vec::new();
+    let mut five_artificial_idx_map_ext: BTreeMap<Vec<u8>, String> = five_artificial_idx_map.clone();
+    // Implement the exact matching, regular expression matching, and Hamming distance calculation here
+    for i in 0..reads.len()/4 {  // 遍历每一个reads
+        let mut cls5 = String::from("");
+        let mut cls3 = String::from("");
+        let read_len = reads[i*4+1].len();
+        let mut left_trim_pos = 0;
+        let mut right_trim_pos = read_len;
+        let mut cls5_bool = false;
+
+        // Check if read is long enough for five_art_length processing
+        if read_len > five_art_length {
+            let trimed_seq_bytes = (&reads[i*4+1][0..five_art_length]).as_bytes();
+            if five_artificial_idx_map_ext.contains_key(trimed_seq_bytes) {
+                left_trim_pos = five_art_length;
+                cls5 = five_artificial_idx_map_ext[trimed_seq_bytes].to_owned();
+                cls5_bool = true;
+            }
+        }
+
+        let mut break_bool = false;
+        if !cls5_bool {
+            if read_len > align_config.seed_len {
+                //filter artificial seq from 5'-read
+
+                // let mut map_id5 = String::new();
+                let mut max_score5 = 0;
+                
+                if five_art_seed_map.len() > 0 {
+                    for j in 0..1+align_config.error_tolerance as usize {
+                        if j+align_config.seed_len < read_len{
+                            let seed = &reads[i*4+1][j..j+align_config.seed_len];
+                            if five_art_seed_map.contains_key(seed) {
+                                let vec_map = five_art_seed_map.get(seed); 
+                                for map in vec_map.unwrap() {
+                                    let map_id5 = map.0.clone(); 
+                                    if five_artificial_id_map.contains_key(&map_id5) {
+                                        let art_seq = String::from_utf8(five_artificial_id_map.get(&map_id5).unwrap().to_owned()).unwrap();
+                                        let pos = map.1 as usize;
+                                        let overlapping_len = art_seq.len() - pos + j;
+                                        if overlapping_len < read_len && overlapping_len >= align_config.seed_len {
+                                            if overlapping_len < read_len && overlapping_len >= align_config.seed_len {
+                                                let res: block_aligner::scan_block::AlignResult = block_align(&art_seq, &reads[i * 4 + 1][..overlapping_len], align_config.match_score, align_config.error_score, align_config.gap_open_score, align_config.gap_extend_score); 
+                                                if res.score > max_score5 && res.score >= overlapping_len as i32 - align_config.error_tolerance as i32 {
+                                                    max_score5 = res.score;
+                                                    cls5 = map_id5.clone();
+                                                    cls5_bool = true;
+                                                    left_trim_pos = overlapping_len as usize;
+                                                    if max_score5 == overlapping_len as i32 {
+                                                        break_bool = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if break_bool {
+                                    break;
+                                }
+                            }
+                        }
+                        if break_bool {
+                            break;
+                        }
+                    }
+                }
+                if !cls5_bool && index_map_bool && max_score5 > 0  && five_index_map.len()>0{
+                    let map_artseq = &reads[i*4+1][..left_trim_pos];
+                    if map_artseq.len() >= align_config.seed_len {
+                        for idx_map in five_index_map {
+                            let idx_id = idx_map.1;
+                            let idx_seq = String::from_utf8(idx_map.0.clone()).unwrap();
+                            let match_pos = regrex_sarch(&map_artseq, &idx_seq);
+                            if match_pos.len() > 0 {
+                                cls5 = idx_id.to_owned();
+                                break;
+                            }
+                            let score = sparse_align(&map_artseq, &idx_seq, idx_seq.len());
+                            if score>=idx_seq.len() as i32 - align_config.error_tolerance as i32 {
+                                cls5 = idx_id.to_owned();
+                                break;
+                            }
+                        }
+                    }
                 }
             }
-        } else {
-            cls.push((cls5.to_string(),cls3.to_string()));
         }
+        //filter artificial seq from 3'-read
+        let mut max_score3 = 0;
+        break_bool = false;
+        if three_artificial_map.len() > 0 && read_len > align_config.seed_len {
+            for j in 0..1+align_config.error_tolerance as usize {
+                if read_len > align_config.seed_len + j {
+                    let seed = &reads[i*4+1][read_len-align_config.seed_len-j..read_len-j];
+                    if three_art_seed_map.contains_key(seed) {
+                        let vec_map = three_art_seed_map.get(seed); 
+                        for map in vec_map.unwrap() {
+                            let map_id3 = map.0.clone(); 
+                            // Fix this check - we should look in three_artificial_id_map not three_art_seed_map
+                            if three_artificial_id_map.contains_key(&map_id3) {
+                                let art_seq = String::from_utf8(three_artificial_id_map.get(&map_id3).unwrap().to_owned()).unwrap();
+                                let pos = map.1 as usize;
+                                let overlapping_len = pos+align_config.seed_len+j;                                                              
+                                // Additional safety checks for indexing
+                                if overlapping_len >= align_config.seed_len && 
+                                   pos + overlapping_len < art_seq.len() && 
+                                   read_len > align_config.seed_len + j + pos && 
+                                   read_len - align_config.seed_len - j - pos < reads[i*4+1].len() {
+                                    let res = block_align(&art_seq[0..pos+overlapping_len], &reads[i*4+1][read_len-align_config.seed_len-j-pos..], align_config.match_score, align_config.error_score, align_config.gap_open_score, align_config.gap_extend_score);
+                                    if res.score > max_score3 && res.score >= overlapping_len as i32 - align_config.error_tolerance as i32 {
+                                        max_score3 = res.score;
+                                        right_trim_pos = read_len-align_config.seed_len-j-pos;
+                                        if max_score3 == overlapping_len as i32 {
+                                            break_bool = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if break_bool {
+                            break;
+                        }
+                    }
+                }
+                if break_bool {
+                    break;
+                }
+            }
+        }
+
+        if index_map_bool && max_score3 > 0 && three_index_map.len()>0{
+            let map_artseq = &reads[i*4+1][right_trim_pos..];
+            if map_artseq.len() >= align_config.seed_len {
+                for idx_map in three_index_map {
+                    let idx_id = idx_map.1;
+                    let idx_seq = String::from_utf8(idx_map.0.clone()).unwrap();
+                    let match_pos = regrex_sarch(&map_artseq, &idx_seq);
+                    if match_pos.len() > 0 {
+                        cls3 = idx_id.to_owned();
+                        break;
+                    }
+                    let score = sparse_align(&map_artseq, &idx_seq, idx_seq.len());
+                    if score>=idx_seq.len() as i32 - align_config.error_tolerance as i32 {
+                        cls3 = idx_id.to_owned();
+                        break;
+                    }
+                }
+            }
+        }
+            // if cls5 != "" || cls3 != "" {
+        if trim_name {
+            if left_trim_pos > 0 && right_trim_pos < read_len {
+                reads[i*4+0] = format!("{} |trimed:0..{},{}..end", &reads[i*4+0].trim_end(), left_trim_pos, right_trim_pos);
+            } else if left_trim_pos > 0 {
+                reads[i*4+0] = format!("{} |trimed:0..{}", &reads[i*4+0].trim_end(), left_trim_pos);
+            } else if right_trim_pos < read_len {
+                reads[i*4+0] = format!("{} |trimed:{}..end", &reads[i*4+0].trim_end(), right_trim_pos);
+            }
+        }
+                
+        if cls5 != "" {
+            let left_trim_seq = (&reads[i * 4 + 1][0..five_art_length]).as_bytes();
+            if !five_artificial_idx_map.contains_key(left_trim_seq) {
+                five_artificial_idx_map_ext.insert(left_trim_seq.to_owned(), cls5.to_string());
+            }
+        }
+
+        //trim artificial seq
+        reads[i*4+1] = reads[i*4+1][left_trim_pos..right_trim_pos].to_string();
+        reads[i*4+3] = reads[i*4+3][left_trim_pos..right_trim_pos].to_string();
+
+        cls.push((cls5.to_string(),cls3.to_string()));
     }
     (cls, five_artificial_idx_map_ext)
 }
@@ -495,7 +687,7 @@ fn process_reads_se(
     three_art_seed_map: &BTreeMap<String, Vec<(String,u8)>>,
     five_art_length: usize,
     prefix1: &str,
-    reads1: Vec<String>,
+    mut reads1: Vec<String>,
     io_tx: Sender<Vec<PEreads>>,
     input_config: &InputConfig,
     align_config: &AlignConfig,
@@ -503,10 +695,17 @@ fn process_reads_se(
 ) {
     let start = Instant::now();
     let idx_loc = input_config.idx_loc;
-    let (cls1, _) = classify_reads(
+    let (cls1, _) = if trim_config.qual_trim > 0 || trim_config.n_trim || trim_config.poly_trim.is_some() {
+        classify_reads_with_trim(
         five_artificial_idx_map, three_artificial_map,
         five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
-        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1.clone(), align_config, trim_config);
+        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, align_config, trim_config)
+    } else {
+        classify_reads_no_trim(
+        five_artificial_idx_map, three_artificial_map,
+        five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
+        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, align_config, trim_config.trim_name)
+    };
     
     // 预分配结果向量以减少重新分配
     let mut results = Vec::with_capacity(cls1.len());
@@ -583,15 +782,29 @@ fn process_reads_pe(
     let mut results = Vec::with_capacity(reads_count);
 
     // 处理reads1和reads2
-    let (cls1, _) = classify_reads(
+    let (cls1, _) = if trim_config.qual_trim > 0 || trim_config.n_trim || trim_config.poly_trim.is_some() {
+        classify_reads_with_trim(
         five_artificial_idx_map, three_artificial_map,
         five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
-        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, align_config, trim_config);
+        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, align_config, trim_config)
+    } else {
+        classify_reads_no_trim(
+        five_artificial_idx_map, three_artificial_map,
+        five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
+        five_art_length, idx_loc & 0b1 == 0b1, &mut reads1, align_config, trim_config.trim_name)
+    };
     
-    let (cls2, _) = classify_reads(
+    let (cls2, _) = if trim_config.qual_trim > 0 || trim_config.n_trim || trim_config.poly_trim.is_some() {
+        classify_reads_with_trim(
         five_artificial_idx_map, three_artificial_map,
         five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map, 
-        five_art_length, idx_loc & 0b10 == 0b10, &mut reads2, align_config, trim_config);
+        five_art_length, idx_loc & 0b10 == 0b10, &mut reads2, align_config, trim_config)
+    } else {
+        classify_reads_no_trim(
+        five_artificial_idx_map, three_artificial_map,
+        five_index_map, three_idx_map, five_artificial_id_map, three_artificial_id_map, five_art_seed_map, three_art_seed_map,
+        five_art_length, idx_loc & 0b10 == 0b10, &mut reads2, align_config, trim_config.trim_name)
+    };
 
     // 处理分类结果并收集输出
     for i in 0..cls1.len() {
@@ -882,20 +1095,20 @@ fn pretrain(pretrain_reads_number: usize, five_art_length: usize, five_artificia
     let start = Instant::now();
 
     let mut pe1_reads: Vec<String> = read_fastq(&input_config.pe1_fastq, pretrain_reads_number);
-    let (_, five_artificial_idx_map_ext1) = classify_reads(
+    let (_, five_artificial_idx_map_ext1) = classify_reads_no_trim(
         &five_artificial_idx_map, &three_artificial_map,
         &five_index_map, &three_index_map, &five_artificial_id_map, &three_artificial_id_map, 
-        &five_art_seed_map, &three_art_seed_map, five_art_length, input_config.idx_loc & 0b1 == 0b1, &mut pe1_reads, align_config, trim_config);
+        &five_art_seed_map, &three_art_seed_map, five_art_length, input_config.idx_loc & 0b1 == 0b1, &mut pe1_reads, align_config, trim_config.trim_name);
         
     let mut five_artificial_idx_map_ext2 = BTreeMap::new();
     
     // Only process PE2 if it exists
     if !input_config.pe2_fastq.is_empty() && Path::new(&input_config.pe2_fastq).exists() {
         let mut pe2_reads: Vec<String> = read_fastq(&input_config.pe2_fastq, pretrain_reads_number);
-        let (_, map_ext2) = classify_reads(
+        let (_, map_ext2) = classify_reads_no_trim(
             &five_artificial_idx_map, &three_artificial_map,
             &five_index_map, &three_index_map, &five_artificial_id_map, &three_artificial_id_map, 
-            &five_art_seed_map, &three_art_seed_map, five_art_length, input_config.idx_loc & 0b10 == 0b10, &mut pe2_reads, align_config, trim_config);
+            &five_art_seed_map, &three_art_seed_map, five_art_length, input_config.idx_loc & 0b10 == 0b10, &mut pe2_reads, align_config, trim_config.trim_name);
         five_artificial_idx_map_ext2 = map_ext2;
     }
 

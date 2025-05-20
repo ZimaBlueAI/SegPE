@@ -1,13 +1,14 @@
 # SegPE
 
-A simple program for classifing and separating paired-ends (PE) FASTQ after removing adapters via adapter-index seq
+A simple program for classifing and separating paired-ends (PE) and single-ends (SE) FASTQ after removing adapters via adapter-index seq
 
 Major algorithms:
 
 - Exact match search: This is a more direct method for finding exact matches of artificial sequences.
-  Regular expression matching and Hamming distance:
-  This is suitable for detecting and locating index sequences, especially when mismatches of a certain length are taken into account.
-- Process and classify PE sequences: After removing the adapter and index sequences, classify the PE sequences and create new PE FASTQ files.
+Regular expression matching and Hamming distance:
+This is suitable for detecting and locating index sequences, especially when mismatches of a certain length are taken into account.
+- Process and classify PE/SE sequences: After removing the adapter and index sequences, classify the PE/SE sequences and create new PE/SE FASTQ files.
+- Remove low-quality reads: This is a common step in bioinformatics to ensure that the data used for analysis is of high quality.
 - Use Multi-threads, SIMD and AsyncIO to handle large amounts of data.
 
 ### Setup

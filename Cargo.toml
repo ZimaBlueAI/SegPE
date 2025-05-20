@@ -12,9 +12,9 @@ license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [package.metadata.docs.rs]
-features = ["simd_neon"]
+# features = ["simd_neon"]
 # Intel x86 change to 
-# features = ["simd_avx2"]
+features = ["simd_avx2"]
 
 [features]
 # Enable SSE2
