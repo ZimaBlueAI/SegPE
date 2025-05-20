@@ -35,24 +35,6 @@ pub fn read_fastq(fastq_path: &str, cutoff_reads_number: usize) -> Vec<String>{
             break;
         }
     }
-    // parse_path(Some(fastq_path), |parser| {
-    //     parser
-    //         .each(|refrecord| {
-    //             let record = refrecord.to_owned_record();
-    //             reads_buffer.push(format!("@{}", String::from_utf8(record.head.to_vec()).unwrap().as_str()));
-    //             reads_buffer.push(String::from_utf8(record.seq.to_vec()).unwrap());
-    //             reads_buffer.push(String::from("+"));
-    //             reads_buffer.push(String::from_utf8(record.qual.to_vec()).unwrap());
-    //             m += 1;
-    //             if cutoff_reads_number>0 && m >= cutoff_reads_number * 4 {
-    //                 println!("Number of reads {}: {}", fastq_path, m);
-    //                 return true;
-    //             }
-    //         true
-    //         })
-    //         .expect("Invalid fastq file");
-    // })
-    // .expect("Invalid compression");
     reads_buffer
 }
 
@@ -143,6 +125,7 @@ fn write_io(data: Vec<String>,file_name: &str)->future::Ready<std::io::Result<()
 }
 
 pub trait WriteFastq {
+    #[allow(dead_code)]
     async fn write_to_fastq(
         &self,
         data: Vec<String>,
@@ -307,4 +290,222 @@ pub fn readfa_to_id_btreemap(fa_file: &str) -> BTreeMap<String, Vec<u8>> {
         }));
     }
     fa_map
+}
+
+// 集中管理所有修剪和质控参数
+#[derive(Clone, Debug)]
+pub struct TrimConfig {
+    pub qual_trim: u8,
+    pub n_trim: bool,
+    pub length_offset: usize,
+    pub ascii_offset: u8,
+    pub poly_trim: Option<usize>,
+    pub trim_name: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AlignConfig {
+    pub seed_len: usize,
+    pub error_tolerance: u8,
+    pub match_score: i8,
+    pub error_score: i8,
+    pub gap_open_score: i8,
+    pub gap_extend_score: i8,
+}
+
+#[derive(Clone, Debug)]
+pub struct InputConfig {
+    pub five_art_fa: String,
+    pub three_art_fa: String,
+    pub five_idx_fa: String,
+    pub three_idx_fa: String,
+    pub idx_loc: u8,
+    pub pe1_fastq: String,
+    pub pe2_fastq: String,
+    pub outdir: String,
+    pub merge_pe: bool,
+    pub num_threads: usize,
+    pub batch: u32,
+    pub train: usize,
+}
+
+pub trait LowQualityControlTrait {
+    /// 对序列和质量值进行两端修剪，返回修剪后的序列、质量、左/右修剪长度
+    /// 新增poly_trim参数：如Some(6)表示去除两端连续大于等于6bp的A/C/G/T
+    fn trim_low_quality(
+        &self,
+        seq: &str,
+        qual: &str,
+        trim_config: &TrimConfig,
+    ) -> Option<(String, String, usize, usize)>;
+}
+
+pub struct LowQualityControlTrimmer;
+
+impl LowQualityControlTrait for LowQualityControlTrimmer {
+    fn trim_low_quality(
+        &self,
+        seq: &str,
+        qual: &str,
+        trim_config: &TrimConfig,
+    ) -> Option<(String, String, usize, usize)> {
+        let qual_threshold = if trim_config.qual_trim > 0 { Some(trim_config.qual_trim) } else { None };
+        let n_trim = trim_config.n_trim;
+        let min_length = trim_config.length_offset;
+        let ascii_offset = trim_config.ascii_offset;
+        let poly_trim = trim_config.poly_trim;
+        let mut left = 0;
+        let mut right = seq.len();
+        let seq_bytes = seq.as_bytes();
+        let qual_bytes = qual.as_bytes();
+
+        // 1. 5'端低质量修剪
+        if let Some(thresh) = qual_threshold {
+            let (mut l_q, mut r_q, mut l_i, mut r_i) = (0, 0, 0, 0);
+            // 3'端
+            while right > left && right >= seq.len() / 2 {
+                let q = qual_bytes[right - 1] - ascii_offset;
+                r_q += q;
+                r_i += 1;
+                if r_q < thresh * r_i {
+                    right -= 1;
+                } else {
+                    break;
+                }
+            }
+            // 5'端
+            while (right - left) >= min_length - 1 {
+                let q = qual_bytes[left] - ascii_offset;
+                l_q += q;
+                l_i += 1;
+                if l_q < thresh * l_i {
+                    left += 1;
+                } else {
+                    break;
+                }
+            }
+            // 5'端修剪后，补充判断是否需要3'端修剪
+            if (right - left) >= min_length && right <= seq.len() / 2 {
+                while (right - left) >= min_length - 1 {
+                    let q = qual_bytes[right - 1] - ascii_offset;
+                    r_q += q;
+                    r_i += 1;
+                    if r_q < thresh * r_i {
+                        right -= 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 2. N/非ACGT修剪
+        if n_trim {
+            // 3'端
+            let mut r_n = false;
+            let mut tmp_right = right;
+            while tmp_right > left && tmp_right >= seq.len() / 2 {
+                let c = seq_bytes[tmp_right - 1] as char;
+                if "ACGTacgt".contains(c) && r_n {
+                    break;
+                } else if !"ACGTacgt".contains(c) {
+                    tmp_right -= 1;
+                    r_n = true;
+                } else {
+                    tmp_right -= 1;
+                }
+            }
+            if r_n {
+                right = tmp_right;
+            }
+            // 5'端
+            let mut l_n = false;
+            let mut tmp_left = left;
+            while tmp_left < right && right - tmp_left >= min_length - 1 {
+                let c = seq_bytes[tmp_left] as char;
+                if "ACGTacgt".contains(c) && l_n {
+                    break;
+                } else if !"ACGTacgt".contains(c) {
+                    tmp_left += 1;
+                    l_n = true;
+                } else {
+                    tmp_left += 1;
+                }
+            }
+            if l_n {
+                left = tmp_left;
+            }
+            // 5'端修剪后，补充判断是否需要3'端修剪
+            if (right - left) >= min_length && right <= seq.len() {
+                let mut r_n = false;
+                let mut tmp_right = right;
+                while (tmp_right - left) >= min_length - 1 {
+                    let c = seq_bytes[tmp_right - 1] as char;
+                    if "ACGTacgt".contains(c) && r_n {
+                        break;
+                    } else if !"ACGTacgt".contains(c) {
+                        tmp_right -= 1;
+                        r_n = true;
+                    } else {
+                        tmp_right -= 1;
+                    }
+                }
+                if r_n {
+                    right = tmp_right;
+                }
+            }
+        }
+
+        // 3. poly-A/C/G/T末端修剪（可选）
+        if let Some(poly_n) = poly_trim {
+            // 3'端
+            if right - left >= min_length {
+                let base = seq_bytes[right - 1] as char;
+                let mut count = 1;
+                let mut temp_right = right;
+                while temp_right > left && (temp_right - left) >= min_length {
+                    let c = seq_bytes[temp_right - 1] as char;
+                    if c == base && "ACGTacgt".contains(c) {
+                        count += 1;
+                        temp_right -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                if count >= poly_n {
+                    right = temp_right;
+                }
+            }
+            // 5'端
+            if right - left >= min_length {
+                let base = seq_bytes[left] as char;
+                let mut count = 1;
+                let mut temp_left: usize = left;
+                while (right - temp_left) >= min_length {
+                    let c = seq_bytes[temp_left] as char;
+                    if c == base && "ACGTacgt".contains(c) {
+                        count += 1;
+                        temp_left += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if count >= poly_n {
+                    left = temp_left;
+                }
+            }
+        }
+
+        // 4. 长度判断
+        if right > left && (right - left) >= min_length {
+            Some((
+                seq[left..right].to_string(),
+                qual[left..right].to_string(),
+                left,
+                seq.len() - right,
+            ))
+        } else {
+            None
+        }
+    }
 }
